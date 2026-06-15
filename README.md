@@ -1,5 +1,7 @@
 # claude-code-stats
 
+![cover](static/cover.png)
+
 A local dashboard for your Claude Code usage — sessions, costs, tool calls, network activity, and more. Reads `~/.claude` directly, nothing leaves your machine.
 
 ## Install
