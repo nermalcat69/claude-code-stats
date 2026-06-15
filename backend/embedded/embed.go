@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-//go:embed build
+//go:embed all:build
 var buildFS embed.FS
 
 func FS() fs.FS {
