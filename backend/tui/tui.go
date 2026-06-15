@@ -145,7 +145,7 @@ func (m Model) View() string {
 			if derived.ApiCallCount == 0 {
 				return "-"
 			}
-			return fmtDuration(derived.ApiTimeMs / derived.ApiCallCount)
+			return fmtResponseTime(derived.ApiTimeMs / derived.ApiCallCount)
 		}()),
 	)
 
@@ -226,6 +226,19 @@ func humanNum(n int64) string {
 		return fmt.Sprintf("%.1fK", float64(n)/1e3)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+func fmtResponseTime(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms < 60_000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	return fmt.Sprintf("%dm %ds", ms/60000, (ms%60000)/1000)
 }
 
 func fmtDuration(ms int64) string {
