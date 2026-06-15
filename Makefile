@@ -29,6 +29,7 @@ build: build-frontend
 
 build-frontend:
 	cd frontend && npm run build
+	cp -r frontend/build/. backend/embedded/build/
 
 # Cross-compile for macOS arm64 (Apple Silicon)
 release-macos-arm64: build-frontend

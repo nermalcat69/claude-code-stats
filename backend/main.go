@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"claude-stats/embedded"
 	"claude-stats/internal/cache"
 	"claude-stats/internal/handlers"
 	"claude-stats/tui"
@@ -53,10 +54,7 @@ func main() {
 	srv := handlers.New(dc, dir)
 	srv.RegisterRoutes(mux)
 
-	buildDir := filepath.Join("..", "frontend", "build")
-	if _, err := os.Stat(buildDir); err == nil {
-		mux.Handle("/", http.FileServer(http.Dir(buildDir)))
-	}
+	mux.Handle("/", http.FileServer(http.FS(embedded.FS())))
 
 	go func() {
 		addr := fmt.Sprintf(":%d", port)

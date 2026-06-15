@@ -2,3 +2,5 @@ example-.claude-dir
 .svelte-kit
 node_modules
 build
+backend/embedded/build/*
+!backend/embedded/build/placeholder
