@@ -141,7 +141,12 @@ func (m Model) View() string {
 		header.Render("⚡ Thinking Speed")+
 			label.Render("Words / min:")+cyan.Bold(true).Render(wpmStr)+"\n"+
 			label.Render("Think chars:")+muted.Render(humanNum(derived.ThinkingChars))+"\n"+
-			label.Render("API time:")+muted.Render(fmtDuration(derived.ApiTimeMs)),
+			label.Render("Avg response:")+muted.Render(func() string {
+			if derived.ApiCallCount == 0 {
+				return "-"
+			}
+			return fmtDuration(derived.ApiTimeMs / derived.ApiCallCount)
+		}()),
 	)
 
 	// ── System box ───────────────────────────────────────────────────────────

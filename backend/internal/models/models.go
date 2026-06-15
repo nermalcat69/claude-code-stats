@@ -145,6 +145,7 @@ type DerivedStats struct {
 	TotalErrors     int64
 	ThinkingChars   int64
 	ApiTimeMs       int64
+	ApiCallCount    int64
 	ThinkingWPM     float64
 }
 
@@ -274,6 +275,7 @@ func ComputeDerived(sessions []SessionInfo) DerivedStats {
 		d.TotalErrors += int64(s.ErrorCount)
 		d.ThinkingChars += s.ThinkingChars
 		d.ApiTimeMs += s.ApiTimeMs
+		d.ApiCallCount += int64(s.AssistantMessageCount)
 	}
 	if d.ApiTimeMs > 0 {
 		minutes := float64(d.ApiTimeMs) / 60000.0
