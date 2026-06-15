@@ -26,8 +26,9 @@ func New(claudeDir string) *DataCache {
 }
 
 func (c *DataCache) Refresh() {
-	stats := parsers.ReadStatsCache(c.claudeDir)
-	sessions, projects := parsers.ParseAllSessions(c.claudeDir)
+	liveSessions, projects := parsers.ParseAllSessions(c.claudeDir)
+	sessions := mergeAndPersist(c.claudeDir, liveSessions)
+	stats := models.ComputeStatsFromSessions(sessions)
 	derived := models.ComputeDerived(sessions)
 
 	c.mu.Lock()

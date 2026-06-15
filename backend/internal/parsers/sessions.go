@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +16,8 @@ import (
 	"claude-stats/internal/models"
 	"claude-stats/internal/pricing"
 )
+
+var bashNetworkRe = regexp.MustCompile(`\b(curl|wget|npm install|npm i |yarn add|pnpm add|pip install|pip3 install|git clone)\b`)
 
 // rawEntry is the minimal shape of any JSONL line we care about.
 type rawEntry struct {
@@ -34,10 +38,11 @@ type assistantMsg struct {
 	Model      string `json:"model"`
 	StopReason string `json:"stop_reason"`
 	Content    []struct {
-		Type     string `json:"type"`
-		Name     string `json:"name,omitempty"`
-		Thinking string `json:"thinking,omitempty"`
-		Text     string `json:"text,omitempty"`
+		Type     string          `json:"type"`
+		Name     string          `json:"name,omitempty"`
+		Thinking string          `json:"thinking,omitempty"`
+		Text     string          `json:"text,omitempty"`
+		Input    json.RawMessage `json:"input,omitempty"`
 	} `json:"content"`
 	Usage struct {
 		InputTokens              int64 `json:"input_tokens"`
@@ -52,6 +57,17 @@ type userMsg struct {
 		Type    string `json:"type"`
 		IsError bool   `json:"is_error,omitempty"`
 	} `json:"content"`
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n") + 1
+	if s[len(s)-1] == '\n' {
+		n--
+	}
+	return n
 }
 
 func parseTime(s string) (time.Time, bool) {
@@ -113,6 +129,7 @@ func ParseSession(filePath, project string) models.SessionInfo {
 		switch e.Type {
 		case "assistant":
 			s.MessageCount++
+			s.AssistantMessageCount++
 			var msg assistantMsg
 			if len(e.Message) > 0 && json.Unmarshal(e.Message, &msg) == nil {
 				if s.Model == "" && msg.Model != "" && msg.Model != "<synthetic>" {
@@ -131,6 +148,57 @@ func ParseSession(filePath, project string) models.SessionInfo {
 					case "tool_use":
 						s.ToolCalls[b.Name]++
 						s.TotalToolCalls++
+						switch b.Name {
+						case "Edit":
+							var inp struct {
+								OldString string `json:"old_string"`
+								NewString string `json:"new_string"`
+							}
+							if len(b.Input) > 0 && json.Unmarshal(b.Input, &inp) == nil {
+								added := countLines(inp.NewString) - countLines(inp.OldString)
+								if added > 0 {
+									s.LinesAdded += int64(added)
+								}
+							}
+						case "Write":
+							var inp struct {
+								Content string `json:"content"`
+							}
+							if len(b.Input) > 0 && json.Unmarshal(b.Input, &inp) == nil {
+								s.LinesAdded += int64(countLines(inp.Content))
+							}
+						case "WebSearch":
+							s.WebSearchCount++
+							var inp struct {
+								Query string `json:"query"`
+							}
+							if len(b.Input) > 0 && json.Unmarshal(b.Input, &inp) == nil && inp.Query != "" {
+								s.WebSearchQueries = append(s.WebSearchQueries, inp.Query)
+							}
+						case "WebFetch":
+							s.WebFetchCount++
+							var inp struct {
+								URL string `json:"url"`
+							}
+							if len(b.Input) > 0 && json.Unmarshal(b.Input, &inp) == nil && inp.URL != "" {
+								if u, err := url.Parse(inp.URL); err == nil && u.Host != "" {
+									s.WebFetchDomains = append(s.WebFetchDomains, u.Host)
+								}
+							}
+						case "Bash":
+							var inp struct {
+								Command string `json:"command"`
+							}
+							if len(b.Input) > 0 && json.Unmarshal(b.Input, &inp) == nil {
+								for _, match := range bashNetworkRe.FindAllString(inp.Command, -1) {
+									key := strings.TrimSpace(strings.Split(match, " ")[0])
+									if s.BashNetworkCounts == nil {
+										s.BashNetworkCounts = make(map[string]int)
+									}
+									s.BashNetworkCounts[key]++
+								}
+							}
+						}
 					case "thinking":
 						s.HasThinking = true
 						s.ThinkingChars += int64(len(b.Thinking))
@@ -165,10 +233,19 @@ func ParseSession(filePath, project string) models.SessionInfo {
 			}
 			var msg userMsg
 			if len(e.Message) > 0 && json.Unmarshal(e.Message, &msg) == nil {
+				isHumanMessage := false
 				for _, c := range msg.Content {
-					if c.Type == "tool_result" && c.IsError {
-						s.ErrorCount++
+					switch c.Type {
+					case "text", "image":
+						isHumanMessage = true
+					case "tool_result":
+						if c.IsError {
+							s.ErrorCount++
+						}
 					}
+				}
+				if isHumanMessage {
+					s.UserMessageCount++
 				}
 			}
 
@@ -290,15 +367,16 @@ func ParseAllSessions(claudeDir string) ([]models.SessionInfo, []models.ProjectI
 
 		for _, fp := range t.files {
 			wg.Add(1)
-			go func(fp, pname string) {
+			go func(fp, pname, ppath string) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				s := ParseSession(fp, pname)
+				s.ProjectPath = ppath
 				mu.Lock()
 				allSessions = append(allSessions, s)
 				mu.Unlock()
-			}(fp, name)
+			}(fp, name, path)
 		}
 	}
 	wg.Wait()
@@ -312,6 +390,8 @@ func ParseAllSessions(claudeDir string) ([]models.SessionInfo, []models.ProjectI
 		if i, ok := projIdx[s.Project]; ok {
 			p := &allProjects[i]
 			p.MessageCount += s.MessageCount
+			p.UserMessageCount += s.UserMessageCount
+			p.AssistantMessageCount += s.AssistantMessageCount
 			p.TotalTokens += s.TokenUsage.InputTokens + s.TokenUsage.OutputTokens +
 				s.TokenUsage.CacheReadInputTokens + s.TokenUsage.CacheCreationInputTokens
 			p.CostUSD += s.CostUSD
@@ -325,7 +405,7 @@ func ParseAllSessions(claudeDir string) ([]models.SessionInfo, []models.ProjectI
 		return allSessions[i].StartTime > allSessions[j].StartTime
 	})
 	sort.Slice(allProjects, func(i, j int) bool {
-		return allProjects[i].CostUSD > allProjects[j].CostUSD
+		return allProjects[i].LastActive > allProjects[j].LastActive
 	})
 
 	return allSessions, allProjects

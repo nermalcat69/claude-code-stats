@@ -1,6 +1,8 @@
 export interface DailyActivity {
 	date: string;
 	messageCount: number;
+	userMessageCount: number;
+	assistantMessageCount: number;
 	sessionCount: number;
 	toolCallCount: number;
 }
@@ -23,6 +25,9 @@ export interface LongestSession {
 	sessionId: string;
 	duration: number;
 	messageCount: number;
+	userMessageCount: number;
+	assistantMessageCount: number;
+	linesAdded: number;
 	timestamp: string;
 }
 
@@ -34,6 +39,10 @@ export interface StatsCache {
 	modelUsage: Record<string, ModelUsageEntry>;
 	totalSessions: number;
 	totalMessages: number;
+	totalUserMessages: number;
+	totalAssistantMessages: number;
+	totalFilesEdited: number;
+	totalLinesAdded: number;
 	longestSession: LongestSession;
 	firstSessionDate: string;
 	hourCounts: Record<string, number>;
@@ -49,12 +58,15 @@ export interface TokenUsage {
 export interface SessionInfo {
 	sessionId: string;
 	project: string;
+	projectPath: string;
 	title: string;
 	lastPrompt: string;
 	startTime: string;
 	endTime: string;
 	durationMs: number;
 	messageCount: number;
+	userMessageCount: number;
+	assistantMessageCount: number;
 	toolCalls: Record<string, number>;
 	totalToolCalls: number;
 	costUSD: number;
@@ -66,6 +78,11 @@ export interface SessionInfo {
 	hasThinking: boolean;
 	errorCount: number;
 	fileCount: number;
+	webSearchCount: number;
+	webFetchCount: number;
+	webSearchQueries: string[];
+	webFetchDomains: string[];
+	bashNetworkCounts: Record<string, number>;
 }
 
 export interface ProjectInfo {
@@ -73,6 +90,8 @@ export interface ProjectInfo {
 	path: string;
 	sessionCount: number;
 	messageCount: number;
+	userMessageCount: number;
+	assistantMessageCount: number;
 	totalTokens: number;
 	costUSD: number;
 	lastActive: string;
