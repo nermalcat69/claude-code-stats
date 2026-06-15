@@ -6,12 +6,10 @@ A local dashboard for your Claude Code usage — sessions, costs, tool calls, ne
 
 ## Install
 
-Download the latest binary from [Releases](../../releases):
-
 ```bash
-./claude-stats-macos-arm64   # Apple Silicon
-./claude-stats-macos-amd64   # Intel Mac
-./claude-stats-linux-amd64   # Linux
+curl -fsSL https://raw.githubusercontent.com/nermalcat69/claude-code-stats/main/install.sh | sh
 ```
+
+Installs to `~/.local/bin/claude-stats`. Or download a binary directly from [Releases](../../releases).
 
 Opens at **http://localhost:6967**.
