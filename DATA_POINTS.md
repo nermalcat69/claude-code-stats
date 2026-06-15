@@ -890,6 +890,512 @@ function computeCost(usage: TokenUsage, model: string): number {
 
 ---
 
+## 10. Storage Analysis
+
+### Real measurements (`~/.claude/` — 133 sessions, 45 projects)
+
+| Directory | Size | Files | What's stored | Why it grows |
+|---|---|---|---|---|
+| `projects/` | **85 MB** | 189 JSONL files | Full conversation logs per session | Every message, tool call, token usage, thinking blocks — ~717 KB/session avg |
+| `file-history/` | **17 MB** | 2,879 files | Actual file content backups for undo | Each file Claude edits is copied here per version; `package.json` backed up 7×, some tsx files 14× |
+| `plugins/` | **5.3 MB** | 385 files | Plugin marketplace registry + all plugin code | Grows when new plugins are installed from marketplace |
+| `backups/` | **260 KB** | 5 files | `.claude.json` config snapshots | One backup per config change |
+| `cache/` | **252 KB** | 1 file | `changelog.md` — app changelog | Static, rarely changes |
+| `telemetry/` | **124 KB** | 4 files | Failed telemetry event payloads | Only failed-to-send events accumulate here |
+| `shell-snapshots/` | **16 KB** | 2 files | Zsh/bash function dumps | Captured once per shell init |
+| `sessions/` | **12 KB** | 3 files | Active session PID metadata | One small JSON per running process |
+| `ide/` | **20 KB** | — | VSCode workspace lock files | One per IDE window open |
+| `session-env/` | **24 KB** | — | Environment variable snapshots | Usually empty or tiny |
+| `history.jsonl` | **4 KB** | 1 file | Slash command history | One line per command typed |
+| `stats-cache.json` | **12 KB** | 1 file | Pre-aggregated analytics | Rewritten on each cleanup |
+| `settings.json` | **12 KB** | 1 file | Permissions + config | Grows with more allowed commands |
+| `mcp-needs-auth-cache.json` | **4 KB** | 1 file | MCP server auth state | One entry per MCP integration |
+| **Total** | **~108 MB** | | | |
+
+### Storage breakdown by what actually costs space
+
+```
+projects/     85 MB  (79%)  ← conversation logs — the dominant cost
+file-history/ 17 MB  (16%)  ← file backups for undo — proportional to edits
+plugins/       5 MB  ( 5%)  ← one-time marketplace download
+everything else < 1 MB each
+```
+
+### Per-session JSONL metrics (from real data)
+
+```
+Average session size:     717 KB
+Median line size:       2,719 bytes  (each JSON event)
+Average lines/session:    270 lines
+```
+
+### Storage growth projection (`projects/` only)
+
+| Sessions | Storage |
+|---|---|
+| 133 (current) | 85 MB |
+| 500 | ~340 MB |
+| 1,000 | ~680 MB |
+| 2,000 | ~1.4 GB |
+| 5,000 | ~3.4 GB |
+
+Growth accelerates with longer sessions (extended thinking blocks are large) and more WebFetch content (HTML pages are stored inline as tool results).
+
+### `file-history/` structure
+
+Organized by session UUID, not by project. Each file is a raw text backup with a content-hash filename + version suffix:
+
+```
+~/.claude/file-history/
+└── {session-uuid}/
+    ├── 53f1fc59531cac07@v1    ← hash of original content, version 1
+    ├── 53f1fc59531cac07@v2    ← same file after Claude's first edit
+    └── ee656db8fbb5794d@v1    ← different file, first backup
+```
+
+The mapping between hash→filename is stored in `file-history-snapshot` entries inside the project JSONL (via `trackedFileBackups[relativePath].backupFileName`).
+
+### Per-project storage (real data, top 15)
+
+| Project | Size | Sessions | MB/Session |
+|---|---|---|---|
+| graycup-com | 8.7 MB | 8 | 1.09 |
+| opend2c | 8.3 MB | 7 | 1.19 |
+| graybulk | 7.4 MB | 13 | 0.57 |
+| nvault-app-webpimageoptimizer | 5.8 MB | 10 | 0.58 |
+| aapka-app | 5.7 MB | 12 | 0.48 |
+| fast-graycup-in | 4.7 MB | 4 | 1.18 |
+| bulkgreencoffee-com | 4.7 MB | 5 | 0.94 |
+| graycup-orders-main | 4.1 MB | 5 | 0.82 |
+| bulkctc | 4.0 MB | 4 | 1.00 |
+| nvault-app-clicksy | 3.9 MB | 2 | 1.95 |
+
+High MB/session = long sessions with extended thinking or heavy WebFetch content.
+
+### How to compute storage stats in the dashboard
+
+```ts
+// Run du on each subdir
+const storageByDir = await Promise.all(
+  ['projects', 'file-history', 'plugins', ...].map(async dir => ({
+    dir,
+    bytes: await du(`${CLAUDE_DIR}/${dir}`),
+  }))
+)
+
+// Per-project from JSONL file sizes
+const perProject = await Promise.all(
+  projectDirs.map(async dir => ({
+    project: decodeProjectDir(dir),
+    bytes: await dirSize(`${CLAUDE_DIR}/projects/${dir}`),
+    sessions: (await fs.readdir(...)).filter(f => f.endsWith('.jsonl')).length,
+  }))
+)
+```
+
+### Dashboard Widgets (Storage)
+
+| Widget | How |
+|---|---|
+| Total `.claude/` size gauge | `du -sh ~/.claude/` |
+| Storage breakdown donut | `du -sh` each subdirectory |
+| Per-project storage bar | `du -sh` each project dir |
+| Largest sessions list | file size of each JSONL |
+| Storage growth over time | correlate `firstSessionDate` + sessions count |
+| File history size vs projects | ratio chart |
+| "Claude is using X MB" summary card | sum of all above |
+
+---
+
+## 11. Network / Internet Usage
+
+### What Claude Code connects to
+
+Confirmed via `lsof -i` on live processes:
+
+| Endpoint | IP | Who | Purpose |
+|---|---|---|---|
+| `api.anthropic.com` | `2607:6bc0::10` (ANTHROPIC-V6) | Anthropic, PBC | LLM inference — all prompt/response traffic |
+| Google Cloud edge | `2600:1901:0:3084::` (GOOGLE-CLOUD) | Google LLC | CDN / telemetry delivery |
+
+Claude Code binaries live at `~/.vscode/extensions/anthropic.claude-code-{version}-darwin-arm64/resources/native-binary/claude` and maintain persistent HTTPS connections (port 443) to Anthropic's API.
+
+### Bandwidth estimation from token data
+
+Since `nettop` requires SIP privileges for per-process byte counts, the most practical approach is **estimating from token data** stored in the JSONL files. Each token ≈ 4 bytes of text content, with ~1.3× JSON wrapper overhead.
+
+**Actual computed values for this user (133 sessions, all-time from `stats-cache.json`):**
+
+```
+Total input tokens sent:                211,661
+Cache write tokens sent:             26,957,557
+Cache read tokens (just metadata):  475,355,847
+Total output tokens received:         4,612,217
+
+Estimated upstream (→ Anthropic):    195.8 MB
+Estimated downstream (← Anthropic):   78.5 MB
+Estimated HTTP overhead:               54.5 MB
+Total API bandwidth:                  ~329 MB
+
+Without cache, upstream would be:     2.61 GB
+Cache bandwidth saved:                2.47 GB   ← cache cuts bandwidth by 88%
+```
+
+| Traffic type | Tokens | Est. Bytes | Notes |
+|---|---|---|---|
+| Prompts sent (input) | 211,661 | ~1.1 MB | Actual new prompt text only |
+| Cache writes sent | 26,957,557 | ~140 MB | Context written to Anthropic's cache |
+| Output received | 4,612,217 | ~24 MB | Claude's responses streamed back |
+| HTTP overhead | ~26,600 requests | ~54 MB | Headers, JSON wrapper, streaming chunks |
+| **Total upstream** | | **~195.8 MB** | Sent to Anthropic |
+| **Total downstream** | | **~78.5 MB** | Received from Anthropic |
+| **Cache saved** | 475,355,847 | **~2.47 GB** | What would have been re-sent without cache |
+
+The cache is the biggest network optimization — 475M tokens read from cache vs 211K sent as fresh input = **99.96% cache hit rate on input tokens**.
+
+### Bandwidth formula
+
+```ts
+const BYTES_PER_TOKEN = 4 * 1.3  // 4 chars × JSON overhead
+
+function estimateBandwidth(usage: ModelUsage) {
+  const upstream =
+    usage.inputTokens * BYTES_PER_TOKEN +          // prompts
+    usage.cacheCreationInputTokens * BYTES_PER_TOKEN  // cache writes
+  
+  const downstream =
+    usage.outputTokens * BYTES_PER_TOKEN           // responses
+
+  const saved =
+    usage.cacheReadInputTokens * BYTES_PER_TOKEN   // what would have been sent
+
+  return { upstream, downstream, saved }
+}
+```
+
+### WebFetch & WebSearch traffic
+
+Separate from LLM inference — Claude can fetch web pages inline.
+
+```jsonc
+// In assistant message usage:
+"server_tool_use": {
+  "web_search_requests": 0,   // Brave/Google search API calls
+  "web_fetch_requests": 0     // Direct URL fetches
+}
+```
+
+WebFetch stores the full fetched HTML/text as tool results in the JSONL — large fetched pages (50–500 KB each) can significantly inflate both JSONL storage and bandwidth. Count from `WebFetch` and `WebSearch` tool_use entries, and sum response content lengths in tool_result entries.
+
+### How to monitor network in real-time on macOS
+
+#### Option 1 — `lsof` (no privileges needed)
+Shows active connections but **not byte counts**. Use to confirm Claude is connected and to which endpoint.
+
+```bash
+lsof -i -n -P 2>/dev/null | grep "claude.*ESTABLISHED"
+# claude  99020  ...  TCP [::]:62226->[2607:6bc0::10]:443 (ESTABLISHED)
+```
+
+#### Option 2 — `nettop` (recommended for real-time bytes)
+Per-process byte counts. Requires running from Terminal (not sandboxed):
+
+```bash
+# Snapshot mode — 3 samples, per-process
+nettop -P -l 3 -t wifi -t wired
+
+# Stream mode — updates every second
+nettop -P -t wifi -t wired
+# Look for "claude" rows — shows bytes_in and bytes_out columns
+```
+
+In code (for dashboard background monitoring):
+
+```ts
+import { spawn } from 'child_process'
+
+function monitorClaudeNetwork(callback: (bytesIn: number, bytesOut: number) => void) {
+  const proc = spawn('nettop', ['-P', '-l', '0', '-t', 'wifi', '-t', 'wired'])
+  proc.stdout.on('data', (chunk: Buffer) => {
+    const lines = chunk.toString().split('\n')
+    for (const line of lines) {
+      if (line.startsWith('claude')) {
+        // parse bytes_in and bytes_out columns
+        const cols = line.trim().split(/\s+/)
+        callback(parseInt(cols[/* bytes_in col */]), parseInt(cols[/* bytes_out col */]))
+      }
+    }
+  })
+}
+```
+
+#### Option 3 — `netstat -ibn` (interface totals)
+Gives cumulative bytes on the whole network interface (not per-process). Useful as a sanity check:
+
+```bash
+netstat -ibn | grep en0
+# en0  1500  ...  17124456 pkts  19842195922 bytes-in  4108573 pkts  1759848331 bytes-out
+```
+
+Current machine totals on en0: **~18.5 GB received**, **~1.6 GB sent** (all time, all processes).
+
+#### Option 4 — Estimate from JSONL (best for historical analysis)
+No OS permissions needed. Computable entirely from the data already in `projects/*.jsonl`. This is what the dashboard should use for historical bandwidth charts.
+
+```ts
+// Aggregate across all sessions
+let totalUpstream = 0, totalDownstream = 0, totalSaved = 0
+
+for (const msg of assistantMessages) {
+  const u = msg.message.usage
+  totalUpstream += (u.input_tokens + u.cache_creation_input_tokens) * 5.2
+  totalDownstream += u.output_tokens * 5.2
+  totalSaved += u.cache_read_input_tokens * 5.2
+}
+```
+
+### Network connection types Claude Code uses
+
+| Connection | Protocol | Destination | Triggered by |
+|---|---|---|---|
+| LLM API calls | HTTPS/TLS (port 443) | `api.anthropic.com` | Every user prompt |
+| Telemetry | HTTPS (port 443) | Google Cloud CDN | Session events (async, best-effort) |
+| WebFetch tool | HTTPS/HTTP | Any URL | User asks Claude to fetch a URL |
+| WebSearch tool | HTTPS (port 443) | Anthropic's search proxy | User asks Claude to search |
+| Plugin marketplace | HTTPS | GitHub API | Plugin install/update |
+| MCP servers | Various (ws/wss) | User-configured | MCP tool calls |
+| IDE websocket | `ws://localhost:*` | Local VSCode extension | IDE ↔ Claude bridge |
+
+### Dashboard Widgets (Network)
+
+| Widget | Source | How |
+|---|---|---|
+| Estimated total API bandwidth | JSONL `usage` fields | `(input + cache_write) × 5.2` bytes/token |
+| Bandwidth saved by cache | JSONL `cache_read_input_tokens` | cache read tokens × input price per byte |
+| Upstream vs downstream ratio | JSONL `usage` | compare input vs output tokens |
+| WebFetch requests count | JSONL `server_tool_use.web_fetch_requests` | sum across sessions |
+| WebSearch requests count | JSONL `server_tool_use.web_search_requests` | sum across sessions |
+| Real-time bytes in/out | `nettop -P -l 1` | shell spawn, parse claude rows |
+| Bandwidth per project | per-project JSONL aggregation | group by project dir |
+| Bandwidth over time (daily) | JSONL timestamp + `dailyModelTokens` | align tokens to dates |
+| Cache efficiency $ saved | token counts × (input price − cache read price) | e.g. $3.00 vs $0.30/1M |
+
+### Gotchas for network measurement
+
+1. **`nettop` byte counts reset on process restart** — can't get historical per-process totals, only current session
+2. **Token-based estimates are slightly low** — JSON field names, UUIDs, and metadata in each API call add ~20% overhead not counted in tokens
+3. **Cache read tokens don't cost full bandwidth** — only a tiny cache-lookup token is sent; the response comes from Anthropic's servers but doesn't re-transmit your original context
+4. **Streaming responses** — Claude uses SSE streaming, so downstream bandwidth arrives incrementally; each chunk has HTTP chunked-transfer overhead
+5. **File content in tool results** — when Claude reads a 50KB file with the Read tool, that content is counted as input tokens AND stored in JSONL, inflating both bandwidth and disk estimates
+6. **MCP websocket** is localhost only — zero internet bandwidth
+
+---
+
+## 12. Time Analysis — How Claude Spends Its Time
+
+This is fully computable from JSONL timestamps. Every message has a `timestamp` field, which lets us reconstruct exactly where time went in each session: thinking, writing, running tools, or waiting.
+
+---
+
+### The four time buckets
+
+```
+User sends prompt
+     ↓
+[■■■ API TIME ■■■■■■■■■■■■■■■■■] ← Claude thinking + writing + network latency
+     ↓
+Assistant responds (tool_use)
+     ↓
+[■ TOOL TIME ■] ← Bash/Read/Edit/Write executing locally
+     ↓
+Tool result returned
+     ↓
+[■■■ API TIME ■■■■■■■■■■■■] ← Claude thinking + writing again
+     ↓
+...repeat until end_turn...
+     ↓
+[     IDLE TIME     ] ← User reading response, typing next prompt
+```
+
+**API time** = `assistant.timestamp − preceding user/tool_result.timestamp`  
+**Tool time** = `tool_result.timestamp − preceding assistant.timestamp`  
+**Idle time** = `next user_prompt.timestamp − last assistant end_turn.timestamp`
+
+---
+
+### Measured values (example data, all sessions)
+
+#### API Response Time (user → assistant)
+
+```
+Samples:   12,418 turns
+Median:     4.9 s
+Average:   11.2 s
+Min:        0.0 s  (cache hit, near-instant)
+Max:      298.2 s  (very long thinking on complex prompt)
+
+Distribution:
+  < 2s      751 turns  ( 6%)  ← usually cached/trivial
+  2–5s    5,544 turns  (45%)  ← most common, standard response
+  5–15s   4,042 turns  (33%)  ← moderate thinking
+  15–60s  1,757 turns  (14%)  ← extended thinking / long output
+  > 60s     324 turns  ( 3%)  ← complex tasks, deep thinking
+```
+
+By stop reason:
+```
+tool_use   11,522 turns  avg=11.5s  med=4.9s  ← Claude decided to call a tool
+end_turn      881 turns  avg= 6.9s  med=5.3s  ← Claude finished responding
+```
+
+#### Tool Execution Time (assistant → tool_result)
+
+```
+Samples:  7,048 tool calls
+Median:   1.01 s
+Average:  2.50 s
+Min:      0.001 s
+Max:    118.5 s  (background server startup)
+
+Distribution:
+  < 0.1s    3,102 calls  (44%)  ← Read, TodoWrite, quick checks
+  0.1–0.5s    199 calls  ( 3%)
+  0.5–2s    3,039 calls  (43%)  ← Edit, Write, short Bash
+  2–10s       402 calls  ( 6%)
+  > 10s       306 calls  ( 4%)  ← npm install, cargo build, server starts
+```
+
+#### Per-tool execution times
+
+| Tool | Calls | Avg Time | Median | Max | What takes the time |
+|---|---|---|---|---|---|
+| `Read` | 1,683 | 0.02s | 0.01s | 0.9s | Pure disk I/O — nearly instant |
+| `TodoWrite` | 174 | 0.00s | 0.00s | 0.0s | In-memory write — instant |
+| `Write` | 896 | 1.01s | 1.02s | 2.0s | Disk write + permission prompt |
+| `Edit` | 2,106 | 1.03s | 1.02s | 13.4s | Diff apply + permission prompt |
+| `Bash` | 2,064 | 6.05s | 0.07s | 118.5s | Huge variance — most fast, some very slow |
+| `ToolSearch` | 39 | 2.97s | 0.01s | 115.6s | Schema loading, occasionally slow |
+| `Skill` | 13 | 0.61s | 0.02s | 4.0s | Skill loading |
+| `WebFetch` | 45 | 14.79s | 6.31s | 105.5s | Network round trip to fetch URL |
+| `AskUserQuestion` | 7 | 46.35s | 48.59s | 97.2s | Waiting for human to respond |
+| `Agent` | 15 | 61.56s | 46.89s | 111.3s | Spawning + completing sub-agent |
+
+`Bash` median is 0.07s but avg is 6.05s — shows the long tail: most commands are fast (`ls`, `grep`, `cat`) while a few are very slow (server starts, package installs, compilation).
+
+Slow Bash commands seen (> 60s): background server start (`bun src/server.ts`), `npm create`, `cargo test`, `next dev` startup, `cargo build`.
+
+#### Overall time budget (all example sessions)
+
+```
+Total measured active time:    43.54 hours
+  API time (think + write):    38.64 hrs  (88.7%)
+  Tool execution time:          4.90 hrs  (11.3%)
+```
+
+This is time Claude was actively working. Idle/read time between sessions is not captured.
+
+---
+
+### Thinking vs Writing breakdown
+
+Claude's output per assistant turn has two components: `thinking` blocks (internal reasoning, never shown to user) and `text` blocks (actual response). Both are stored in the JSONL.
+
+**Computed from character counts across all thinking + text content:**
+
+```
+Thinking chars:     2,134,934   (74.6% of all output chars)
+Text output chars:    727,504   (25.4%)
+Ratio:              2.93× more thinking than writing
+
+Average per turn:
+  Thinking block:  1,186 chars  ≈ 297 tokens
+  Text response:     206 chars  ≈  52 tokens
+```
+
+Claude thinks ~3× more than it writes. The thinking is essentially invisible work.
+
+**Thinking presence per turn:**
+
+```
+Turns with thinking blocks:     1,800  (14.5%)
+Turns without thinking:        10,638  (85.5%)
+  └ Tool-only turns (no text or think): 7,102  (56.9% of all turns)
+```
+
+Most turns are tool-only — Claude silently calls Bash/Read/Edit without any thinking or text output. When Claude does think, those turns are the "decision points" in a session.
+
+**Thinking depth grows with session length:**
+
+```
+Early turns (0–9):   avg 722 chars of thinking
+Mid turns (10–49):  avg 1,227 chars of thinking
+Late turns (50+):   avg 1,288 chars of thinking
+```
+
+Claude thinks harder as the session goes on and context grows — likely because late-session problems are more complex or require integrating earlier context.
+
+---
+
+### How to compute in the dashboard
+
+```ts
+interface TurnTiming {
+  sessionId: string
+  turnIndex: number
+  apiMs: number          // user → assistant (think + write + network)
+  toolMs: number         // assistant → tool_result
+  thinkingChars: number  // chars in thinking blocks
+  textChars: number      // chars in text blocks
+  toolCalls: string[]    // tool names called this turn
+  stopReason: string     // 'tool_use' | 'end_turn'
+}
+
+function analyzeTiming(messages: Message[]): TurnTiming[] {
+  // Sort by timestamp, then for each assistant message:
+  // 1. API time = ts(assistant) - ts(prev user/tool_result)
+  // 2. Tool time = ts(tool_result) - ts(this assistant)
+  // 3. Thinking chars = sum len(block.thinking) for thinking blocks
+  // 4. Text chars = sum len(block.text) for text blocks
+}
+```
+
+For response latency histogram, filter `apiMs` to `0 < apiMs < 300_000` (5 min) to remove stale/outlier sessions.
+
+---
+
+### Daily time budget (sample from example data)
+
+| Date | API Hours | Tool Hours | API% |
+|---|---|---|---|
+| 2026-05-13 | 2.32 | 0.23 | 91% |
+| 2026-05-31 | 2.86 | 0.52 | 85% |
+| 2026-06-02 | 2.78 | 0.36 | 88% |
+| 2026-06-03 | **4.14** | **0.62** | 87% |
+| 2026-06-08 | 3.25 | 0.37 | 90% |
+
+Busy days have 3–4 hours of actual API time (Claude actively thinking/writing). Tool execution is consistently 10–15% of total time.
+
+---
+
+### Dashboard Widgets (Time)
+
+| Widget | Source | Notes |
+|---|---|---|
+| Total hours Claude worked | sum all `apiMs` across sessions | e.g., "38.6 hrs of API time" |
+| API response latency histogram | `apiMs` per turn | 5 buckets: <2s, 2-5s, 5-15s, 15-60s, >60s |
+| Tool execution time by tool | `toolMs` grouped by tool name | bar chart with avg+median |
+| Thinking vs writing ratio | `thinkingChars / textChars` | donut chart: 74.6% think, 25.4% write |
+| Daily time budget | `daily_api_ms` + `daily_tool_ms` | stacked bar by day |
+| Thinking depth over session | `thinkingChars` by `turnIndex` | line chart — grows with session length |
+| Slowest Bash commands | filter `Bash` toolMs > 10s | table: duration + command output preview |
+| Turns with vs without thinking | count thinking blocks | bar: decision turns vs tool-only turns |
+| Total tool execution time | sum all `toolMs` | "Claude ran tools for 4.9 hrs total" |
+| Longest single API wait | max `apiMs` | "longest thinking: 298s" |
+| AskUserQuestion wait times | filter tool=AskUserQuestion `toolMs` | shows how long user takes to respond |
+| Agent sub-task durations | filter tool=Agent `toolMs` | "sub-agents took avg 62s each" |
+
+---
+
 ## Build Priority
 
 ### Tier 1 — Zero parsing, instant value
