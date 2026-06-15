@@ -12,4 +12,6 @@ curl -fsSL https://raw.githubusercontent.com/nermalcat69/claude-code-stats/main/
 
 Installs to `~/.local/bin/claude-stats`. Or download a binary directly from [Releases](../../releases).
 
+> Make sure `~/.local/bin` is in your `$PATH`. Add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if needed.
+
 Opens at **http://localhost:6967**.
