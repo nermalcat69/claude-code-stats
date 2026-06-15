@@ -29,6 +29,7 @@ build: build-frontend
 
 build-frontend:
 	cd frontend && npm run build
+	find backend/embedded/build -not -name 'placeholder' -delete 2>/dev/null; true
 	cp -r frontend/build/. backend/embedded/build/
 
 # Cross-compile for macOS arm64 (Apple Silicon)

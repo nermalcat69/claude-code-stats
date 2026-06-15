@@ -29,7 +29,9 @@ jobs:
         run: cd frontend && npm ci && npm run build
 
       - name: Copy frontend into embed dir
-        run: cp -r frontend/build/. backend/embedded/build/
+        run: |
+          find backend/embedded/build -not -name 'placeholder' -delete 2>/dev/null || true
+          cp -r frontend/build/. backend/embedded/build/
 
       - name: Build binaries
         run: |
