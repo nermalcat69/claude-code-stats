@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	* { box-sizing: border-box; }
+	html { background: #F7F7F5; color: #34322E; }
+	body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+	::-webkit-scrollbar { width: 5px; height: 5px; }
+	::-webkit-scrollbar-track { background: transparent; }
+	::-webkit-scrollbar-thumb { background: #E4E0D8; border-radius: 999px; }
+	::-webkit-scrollbar-thumb:hover { background: #D0CBC2; }
+}
+
+@layer components {
+	/* card: white container, editorial border, 16px radius */
+	.card {
+		@apply bg-paper-card border border-paper-border rounded-2xl p-5;
+	}
+	.card-sm {
+		@apply bg-paper-card border border-paper-border rounded-xl p-3;
+	}
+
+	/* pill chip for tab navigation */
+	.chip {
+		@apply px-4 py-1.5 rounded-full border border-paper-border text-sm font-medium
+		       text-ink-secondary bg-paper-card
+		       transition-all duration-150 ease-out
+		       hover:border-ink-muted hover:text-ink;
+	}
+	.chip.active {
+		@apply bg-ink text-paper-card border-ink;
+	}
+
+	/* badge */
+	.badge {
+		@apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+	}
+
+	/* table rows */
+	.trow {
+		@apply border-b border-paper-border transition-colors duration-150 hover:bg-paper-hover;
+	}
+	.th {
+		@apply px-4 py-3 text-xs text-ink-muted font-medium text-left tracking-wide;
+	}
+	.td {
+		@apply px-4 py-3 text-sm text-ink;
+	}
+
+	/* bar track */
+	.bar-track {
+		@apply flex-1 h-1.5 bg-paper-deep rounded-full overflow-hidden;
+	}
+	.bar-fill {
+		@apply h-full rounded-full bg-terra transition-all duration-150;
+	}
+}

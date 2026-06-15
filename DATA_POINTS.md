@@ -3,6 +3,12 @@
 All data lives at `~/.claude/` on macOS (`/Users/{username}/.claude/`).  
 Real path confirmed: `/Users/graycup/.claude/`
 
+Operating System	~/.claude resolves to
+macOS	/Users/<username>/.claude
+Linux	/home/<username>/.claude
+WSL (Ubuntu, Debian, etc.)	/home/<username>/.claude
+Windows (PowerShell/CMD)	C:\Users\<username>\.claude
+
 ---
 
 ## Directory Structure
